@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Path, Query, status, HTTPException
+from sqlalchemy import select, delete
 
 from database.connection import SessionFactory
 from user.models import User
@@ -6,102 +7,131 @@ from user.request import UserCreateRequest, UserUpdateRequest
 from user.response import UserResponse
 
 
-# user 핸들러 함수들을 관리하는 객체
 router = APIRouter(tags=["User"])
 
-# 임시 데이터베이스
-users = [
-    {"id": 1, "name": "alex", "job": "student"},
-    {"id": 2, "name": "bob", "job": "sw engineer"},
-    {"id": 3, "name": "chris", "job": "barista"},
-]
+# users = [
+#     {"id": 1, "name": "alex", "job": "student"},
+#     {"id": 2, "name": "bob", "job": "sw engineer"},
+#     {"id": 3, "name": "chris", "job": "barista"},
+# ]
 
-# 전체 사용자 목록 조회 API
-# GET /users
-@router.get("/users", status_code=status.HTTP_200_OK)
+@router.get(
+        "/users", 
+        summary="전체 사용자 조회 API",
+        status_code=status.HTTP_200_OK,
+        response_model=list[UserResponse],
+)
+
 def get_users_handler():
+    with SessionFactory() as session:
+    stmt =select(User)
+    result = session.execute(stmt)
+    users = result.scalars().all()
     return users
 
 
-# 사용자 정보 검색 API
-# GET /users/search?name=alex
-# GET /users/search?job=student
-@router.get("/users/search")
+@router.get(
+        "/users/search",
+        summary="사용자 정보 검색 API",
+        response_model=list[UserResponse],
+)
+
 def search_user_handler(
     name: str | None = Query(None),
     job: str | None = Query(None),
 ):
-    if name is None and job is None:
-        return {"msg": "조회에 사용할 QueryParam이 필요합니다."}
-    return {"name": name, "job": job}
-
-
-# 단일 사용자 데이터 조회 API
-# GET /users/{user_id} -> {user_id}번 사용자 데이터 조회
-@router.get("/users/{user_id}")
-def get_user_handler(
-    user_id: int = Path(..., ge=1)
-):
-    for user in users:
-        if user["id"] == user_id:
-            return user
+    if not name and not job:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="검색 조건이 없습니다."
+        )
     
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="User Not Found",
-    )
 
-# 회원 추가 API
-@router.post(
-    "/users", 
-    status_code=status.HTTP_201_CREATED,
-    response_model=UserResponse,
-)
-def create_user_handler(
-    body: UserCreateRequest
-):
-    
-    #
+    stmt = select(User)
+    if name:
+        stmt = stmt.where(User.name == name)
+    if job:
+        stmt = stmt.where(User.job == job)
+
     with SessionFactory() as session:
-        new_user = User(name=body.name, job=body.job)
+        result = session.execute(stmt)
+        users = result.scalar().all()
+    return users
+
+@router.get(
+        "/users/{user_id}",
+        summary="단일 사용자 데이터 조회 API", 
+        response_model=UserResponse,
+)
+
+def get_user_handler(
+    user_id: int = Path(..., ge=1),
+):
+    with SessionFactory() as session:
+        stmt = select(User).where(User.id == user_id)
+        result = session.execute(stmt)
+
+        user = result.scalar() 
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User Not Found", 
+        ) 
+    return user
+
+@router.post(
+        "/users",
+        summary="회원 가입(추가) API",
+        status_code=status.HTTP_201_CREATED,
+        response_model=UserResponse,
+)
+
+def create_user_handler(
+    body: UserCreateRequest,
+    session = Depends(get_session),
+):
+    with SessionFactory() as session:
+        new_user  = User(name=body.name, job=body.job)
         session.add(new_user)
-        session.commit() # 변경사항 저장
-        session.refresh(new_user) # id, created_at 읽어옴
-        return new_user
+        session.commit() 
+        session.refresh(new_user) 
+        return new_user    
     
-# 회원 정보 수정 API
-# PATCH /users/{user_id}
 @router.patch(
     "/users/{user_id}",
+    summary= "회원 정보 수정 API",
     response_model=UserResponse,
 )
 def update_user_handler(
     user_id: int,
     body: UserUpdateRequest,
 ):
-    for user in users:
-        if user["id"] == user_id:
-            user["job"] = body.job
-            return user
+        
+    with SessionFactory() as session:
+        stmt = select(User).where(User.id == user_id)
+        result = session.execute(stmt)
+        user = result.scalar()
 
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="User Not Found",
-    )
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User Not Found",
+            )
 
-# 회원 삭제 API
-# DELETE /users/{user_id}
+        user.job = body.job
+        session.commit()
+
 @router.delete(
-    "/users/{user_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+        "/users/{user_id}",
+        summary="회원 삭제 API",
+        status_code=status.HTTP_204_NO_CONTENT,
 )
+
 def delete_user_handler(user_id: int):
-    for user in users:
-        if user["id"] == user_id:
-            users.remove(user)
-            return
     
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="User Not Found",
-    )
+    with SessionFactory() as session:
+        stmt = delete(User).where(User.id == user_id)
+        session.execute(stmt)
+        session.commit()
+    
