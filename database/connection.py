@@ -11,3 +11,10 @@ SessionFactory = sessionmaker(
     autoflush=False,
     expire_on_commit=False,
 )
+
+def get_session():
+    session = SessionFactory()
+    try:
+        yield session
+    finally:
+        session.close()
